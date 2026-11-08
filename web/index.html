@@ -348,10 +348,12 @@ select.fld option{background:var(--bg);color:var(--text)}
         <div class="sec" style="margin-top:0"><span class="label"><i class="ic">&#xE8F1;</i>Profile sources</span></div>
         <div id="suSrc"></div>
         <div class="sec"><span class="label"><i class="ic">&#xE721;</i>Research my hardware with Claude</span></div>
-        <p class="txt">Claude searches reviews and owner results for your exact parts (including your GPU's board partner and your motherboard's BIOS), then Headroom builds a profile from them with the source links. Only model names, versions and limits from the scan are sent. It takes a few minutes and uses your own Anthropic API key, so it's billed to your account; the log shows what it used.</p>
-        <div class="row"><input class="fld" type="password" id="suKey" placeholder="Anthropic API key (sk-ant-…)" autocomplete="off" style="flex:1;min-width:220px">
+        <p class="txt">Claude searches reviews and owner results for your exact parts (including your GPU's board partner and your motherboard's BIOS), then Headroom builds a profile from them with the source links. Only model names, versions and limits from the scan are sent. It takes a few minutes. It runs through Claude Code with the login already on this PC, so it counts against your Claude plan; the log shows what it used.</p>
+        <div class="hint" id="suCli"></div>
+        <details id="suKeyBox" style="margin-top:8px"><summary class="hint" style="cursor:pointer">No Claude Code? Use an Anthropic API key instead</summary>
+        <div class="row" style="margin-top:6px"><input class="fld" type="password" id="suKey" placeholder="Anthropic API key (sk-ant-…)" autocomplete="off" style="flex:1;min-width:220px">
           <button class="btn" id="suKeySave"><i class="ic">&#xE72E;</i>Save key</button></div>
-        <div class="hint" id="suKeyState"></div>
+        <div class="hint" id="suKeyState"></div></details>
         <div class="row" style="margin-top:10px"><button class="btn pri" id="suResearch"><i class="ic">&#xE721;</i>Research my hardware</button>
           <button class="btn q" id="suRebuild"><i class="ic">&#xE777;</i>Use built-in data only</button></div>
         <div class="job idle" id="suJob" style="margin-top:12px"><div class="top"><span class="ph" id="suPh">Idle</span></div><div class="msg" id="suMsg"></div></div>
@@ -677,8 +679,13 @@ async function renderSetup(force){
   $("suSrc").innerHTML=Object.keys(src).length?["gpu","cpu","board"].map(k=>stat(k.toUpperCase(),`<span class="chip ${src[k]}">${R[src[k]]||src[k]||"–"}</span>`)).join("")+
     (SU.research?`<div class="hint">Research ${esc(SU.research.when)} · ${SU.research.sources.length} sources (see Profiles).</div>`:
      Object.values(src).includes("family")?`<div class="hint">Generic means no profile for the exact part ships with Headroom: Research fills it in with real results for your model.</div>`:""):`<div class="hint">No profile yet.</div>`;
-  $("suKeyState").innerHTML=SU.has_key?`<span class="good">A key is saved</span> (encrypted for this Windows user). Paste a new one to replace it, or save an empty box to remove it.`:"Get a key at console.anthropic.com → API keys.";
-  $("suResearch").disabled=!!st.busy||!SU.has_key||!sc.when; $("suRebuild").disabled=!!st.busy||!sc.when; $("suScan").disabled=!!st.busy;
+  const cli=SU.claude_cli;
+  $("suCli").innerHTML=cli&&cli.logged_in?`<span class="good">Claude Code is logged in</span> on this PC: research uses it${SU.has_key?" (the saved API key is only a fallback)":""}.`:
+    cli?`<span class="warn">Claude Code is installed but not logged in.</span> Open a terminal, run <b>claude</b> and use <b>/login</b>, then come back here.${SU.has_key?" Until then the saved API key is used.":""}`:
+    !SU.cli_checked?"Looking for Claude Code…":`Claude Code wasn't found. Install it from claude.com/claude-code and log in${SU.has_key?", or keep using the saved API key":", or use an API key below"}.`;
+  if(SU.cli_checked&&!$("suKeyBox").dataset.auto){ $("suKeyBox").dataset.auto=1; if(!(cli&&cli.logged_in)) $("suKeyBox").open=true; }
+  $("suKeyState").innerHTML=SU.has_key?`<span class="good">A key is saved</span> (encrypted for this Windows user). Paste a new one to replace it, or save an empty box to remove it.`:"Get a key at console.anthropic.com → API keys. API use is billed to that account.";
+  $("suResearch").disabled=!!st.busy||!SU.research_via||!sc.when; $("suRebuild").disabled=!!st.busy||!sc.when; $("suScan").disabled=!!st.busy;
   const job=$("suJob"); job.className="job "+(st.busy?"":st.error?"err":"idle"); $("suPh").textContent=st.busy?st.busy:st.error?"Failed":"Idle";
   $("suMsg").textContent=st.busy?(st.progress||""):st.error||(SU.research?"Last research: "+SU.research.when:"");
   $("suLhm").innerHTML=SU.lhm?stat("LibreHardwareMonitor","running, web server on :8085","good"):
@@ -694,7 +701,7 @@ async function renderSetup(force){
 $("suScan").onclick=()=>act("/api/setup/scan",{},"Scanning…").then(()=>renderSetup(true));
 $("suRebuild").onclick=()=>act("/api/setup/rebuild",{},"Rebuilding the profile from built-in data").then(()=>renderSetup(true));
 $("suKeySave").onclick=async()=>{ await act("/api/setup/key",{key:$("suKey").value.trim()},$("suKey").value.trim()?"Key saved":"Key removed"); $("suKey").value=""; renderSetup(true); };
-$("suResearch").onclick=async()=>{ if(await ask("Research with Claude","Claude will search the web for results on your exact parts and build a profile with sources. It takes a few minutes and is billed to your Anthropic API account.\n\nOnly hardware model names, versions and limits are sent.",{yes:"Start",icon:""})) act("/api/setup/research",{}).then(()=>renderSetup(true)); };
+$("suResearch").onclick=async()=>{ if(await ask("Research with Claude","Claude will search the web for results on your exact parts and build a profile with sources. It takes a few minutes and "+(SU.research_via==="cli"?"runs through Claude Code, so it counts against your Claude plan.":"is billed to your Anthropic API account.")+"\n\nOnly hardware model names, versions and limits are sent.",{yes:"Start",icon:""})) act("/api/setup/research",{}).then(()=>renderSetup(true)); };
 $("suCoolSave").onclick=()=>act("/api/setup/cooling",{pump_sensor:$("suPump").value,radiator_sensor:$("suRad").value,pump_min_rpm:+$("suPumpMin").value},"Cooling check saved").then(()=>renderSetup(true));
 
 // ---- CPU tab

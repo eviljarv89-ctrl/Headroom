@@ -17,7 +17,7 @@ Safe, automatic overclocking for Windows gaming PCs: a GPU auto-overclock with i
 
 On first start Headroom scans the PC: CPU, motherboard and BIOS, GPU and its board partner, driver and power limits, memory kits, sensors and fans. It then builds the active profile from the best source it has for each part:
 
-1. **Research with Claude** (Setup tab, optional). Claude searches reviews and owner results for the exact parts, then writes a profile with source links. This needs your own Anthropic API key, which is stored encrypted with Windows DPAPI, and the use is billed to your account. Only model names, versions and limits from the scan are sent. Only URLs that were actually retrieved are kept as sources.
+1. **Research with Claude** (Setup tab, optional). Claude searches reviews and owner results for the exact parts, then writes a profile with source links. It runs through [Claude Code](https://claude.com/claude-code) with the login already on the PC, so it counts against your Claude plan; no API key is needed. Without Claude Code, an Anthropic API key works instead (stored encrypted with Windows DPAPI, billed to that account). Only model names, versions and limits from the scan are sent. Only URLs that were actually retrieved are kept as sources.
 2. **Built-in research** (`profiles/builtin/`), for parts that have already been researched.
 3. **Family guidance** (`profiles/families.json`): conservative ranges for each GPU or CPU generation.
 

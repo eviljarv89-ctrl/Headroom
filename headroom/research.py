@@ -2,9 +2,14 @@
 overclocking results, safety limits and exact BIOS menu names for the parts in
 THIS PC, the same way Headroom's built-in profiles were researched.
 
-Needs the user's own Anthropic API key (stored encrypted with Windows DPAPI, or
-ANTHROPIC_API_KEY). Costs a little API credit per run; nothing is sent except
-the hardware scan summary below (no serials, user names or files).
+Runs through Claude Code (the `claude` CLI) with the login already on this PC, so
+it uses the user's Claude plan. Without Claude Code it falls back to the user's own
+Anthropic API key (stored encrypted with Windows DPAPI, or ANTHROPIC_API_KEY).
+Nothing is sent except the hardware scan summary below (no serials, user names or files).
+
+The CLI runs with only its WebSearch and WebFetch tools, no user settings, hooks or
+MCP servers, in an empty folder, so web pages it reads can't make it do anything else.
+Because the backend is elevated, only a claude.exe signed by Anthropic is used.
 
 Two steps:
   1. research  - Claude searches/reads the web and writes notes. Every URL it
@@ -18,6 +23,11 @@ import ctypes
 import ctypes.wintypes as W
 import json
 import os
+import re
+import shutil
+import subprocess
+import tempfile
+import threading
 import time
 
 from .common import SETTINGS_FILE, read_json, write_json
@@ -250,8 +260,8 @@ def to_profiles(j, allowed):
     return {"gpu": gpu, "cpu": cpu, "board": board, "memory": memory}
 
 
-# ---------------------------------------------------------------- main
-def run(scan, progress=lambda msg: None, key=None):
+# ---------------------------------------------------------------- Anthropic API (fallback)
+def run_api(scan, progress=lambda msg: None, key=None):
     """Returns {"gpu","cpu","board","memory","sources","when","model","usage"}. Raises ResearchError."""
     try:
         import anthropic
@@ -337,6 +347,246 @@ def run(scan, progress=lambda msg: None, key=None):
 
     allowed = set(urls)
     out = to_profiles(j, allowed)
+    usage["via"] = "Anthropic API key"
     out.update(sources=sorted(allowed), when=time.strftime("%Y-%m-%d %H:%M"), model=MODEL, usage=usage,
                notes_text="\n\n".join(notes))
     return out
+
+
+# ---------------------------------------------------------------- Claude Code CLI
+CLI_TIMEOUT = 1800          # whole research step, seconds
+_NO_WINDOW = 0x08000000     # CREATE_NO_WINDOW: claude.exe is a console app, the backend has no console
+_cli_cache = {"t": 0, "v": None, "busy": False, "checked": False}
+
+
+def _cli_candidates():
+    home = os.environ.get("USERPROFILE") or os.path.expanduser("~")
+    seen = []
+    for p in (shutil.which("claude.exe"), os.path.join(home, ".local", "bin", "claude.exe"),
+              os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "claude", "claude.exe")):
+        if p and os.path.isfile(p) and os.path.normcase(os.path.abspath(p)) not in seen:
+            seen.append(os.path.normcase(os.path.abspath(p)))
+            yield os.path.abspath(p)
+
+
+def _signed_by_anthropic(path):
+    """Authenticode check: the backend runs elevated, and claude.exe lives in a folder the user can write."""
+    ps = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+    cmd = ("$s = Get-AuthenticodeSignature -LiteralPath $env:HR_CLI; "
+           "if ($s.Status -eq 'Valid' -and $s.SignerCertificate.Subject -match '^CN=\"?Anthropic, PBC\"?,') { 'ok' }")
+    try:
+        r = subprocess.run([ps, "-NoProfile", "-NonInteractive", "-Command", cmd], capture_output=True, text=True,
+                           timeout=30, creationflags=_NO_WINDOW, env=dict(os.environ, HR_CLI=path))
+        return r.stdout.strip() == "ok"
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _cli_env():
+    env = dict(os.environ)
+    for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "HEADROOM_TOKEN"):
+        env.pop(k, None)    # use the CLI's own login, never Headroom's key or token
+    env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
+    return env
+
+
+def _probe_cli():
+    for path in _cli_candidates():
+        if not _signed_by_anthropic(path):
+            continue
+        v = {"path": path, "logged_in": False, "account": None}
+        try:
+            r = subprocess.run([path, "auth", "status"], capture_output=True, text=True, timeout=30,
+                               creationflags=_NO_WINDOW, env=_cli_env(), cwd=tempfile.gettempdir())
+            j = json.loads(r.stdout or "{}")
+            v["logged_in"] = bool(j.get("loggedIn"))
+            v["account"] = j.get("authMethod")
+        except (OSError, subprocess.SubprocessError, ValueError):
+            pass
+        return v
+    return None
+
+
+def _refresh_cli():
+    try:
+        v = _probe_cli()
+        _cli_cache.update(t=time.time(), v=v, checked=True)
+    finally:
+        _cli_cache["busy"] = False
+
+
+def cli_status(fresh=False):
+    """{"path", "logged_in", "account"} for a usable claude.exe, or None.
+    fresh=True checks now (blocking); otherwise the cached answer is returned and refreshed
+    in the background once it's a minute old, so the UI's status poll never waits on it."""
+    if fresh:
+        _refresh_cli()
+        return _cli_cache["v"]
+    if time.time() - _cli_cache["t"] > 60 and not _cli_cache.get("busy"):
+        _cli_cache["busy"] = True
+        threading.Thread(target=_refresh_cli, daemon=True).start()
+    return _cli_cache["v"]
+
+
+def cli_checked():
+    return bool(_cli_cache.get("checked"))
+
+
+def _cli_args(path, *extra):
+    return [path, "-p", "--model", MODEL, "--strict-mcp-config", "--setting-sources", "",
+            "--no-session-persistence", "--disable-slash-commands", "--system-prompt", SYSTEM, *extra]
+
+
+def _tool_text(content):
+    if isinstance(content, str):
+        return content
+    return "\n".join(c.get("text", "") for c in content or [] if isinstance(c, dict))
+
+
+def _search_links(text, urls):
+    """WebSearch results carry 'Links: [{"title", "url"}, ...]'."""
+    dec = json.JSONDecoder()
+    for m in re.finditer(r"Links:\s*(?=\[)", text):
+        try:
+            links, _ = dec.raw_decode(text, m.end())
+        except ValueError:
+            continue
+        _collect_urls(links, urls)
+
+
+def _run_cli_research(path, summary, progress, workdir):
+    args = _cli_args(path, "--output-format", "stream-json", "--verbose", "--effort", "high",
+                     "--tools", "WebSearch,WebFetch", "--allowedTools", "WebSearch,WebFetch",
+                     "--permission-mode", "dontAsk")
+    errf = tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace")
+    p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errf,
+                         cwd=workdir, env=_cli_env(), creationflags=_NO_WINDOW, text=True, encoding="utf-8")
+    timer = threading.Timer(CLI_TIMEOUT, p.kill)
+    timer.start()
+    urls, pending, result = {}, {}, None
+    searches = fetches = 0
+    try:
+        p.stdin.write(RESEARCH_TASK.format(scan=summary))
+        p.stdin.close()
+        for line in p.stdout:
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            t = ev.get("type")
+            content = (ev.get("message") or {}).get("content")
+            if t == "assistant" and isinstance(content, list):
+                for c in content:
+                    if c.get("type") == "tool_use":
+                        pending[c.get("id")] = (c.get("name"), c.get("input") or {})
+                        if c.get("name") == "WebSearch":
+                            searches += 1
+                        elif c.get("name") == "WebFetch":
+                            fetches += 1
+                        progress("Researching: %d searches, %d pages read" % (searches, fetches))
+            elif t == "user" and isinstance(content, list):
+                for c in content:
+                    if c.get("type") != "tool_result" or c.get("is_error"):
+                        continue
+                    name, inp = pending.pop(c.get("tool_use_id"), (None, {}))
+                    if name == "WebSearch":
+                        _search_links(_tool_text(c.get("content")), urls)
+                    elif name == "WebFetch":
+                        _collect_urls({"url": inp.get("url")}, urls)
+            elif t == "result":
+                result = ev
+        p.wait()
+    finally:
+        timer.cancel()
+        if p.poll() is None:
+            p.kill()
+    errf.seek(0)
+    err = errf.read().strip()
+    errf.close()
+    if result is None:
+        raise ResearchError("Claude Code stopped without an answer%s." % (": " + err[-300:] if err else
+                            " (it ran longer than %d minutes)" % (CLI_TIMEOUT // 60)))
+    if result.get("is_error"):
+        raise ResearchError(_cli_error(result))
+    return result, urls, searches, fetches
+
+
+def _cli_error(result):
+    msg = str(result.get("result") or result.get("errors") or result.get("subtype") or "unknown error")
+    if re.search(r"authenticat|log ?in|oauth|expired", msg, re.I):
+        return "Claude Code isn't logged in. Run 'claude' in a terminal and use /login, then try again."
+    if re.search(r"usage limit|rate limit|limit reached", msg, re.I):
+        return "Your Claude plan's usage limit was reached; try again later. (%s)" % msg[:200]
+    return "Claude Code error: %s" % msg[:300]
+
+
+def _run_cli_structure(path, prompt, workdir):
+    args = _cli_args(path, "--output-format", "json", "--effort", "medium", "--tools", "",
+                     "--json-schema", json.dumps(SCHEMA, separators=(",", ":")))
+    try:
+        r = subprocess.run(args, input=prompt, capture_output=True, text=True, encoding="utf-8", timeout=900,
+                           cwd=workdir, env=_cli_env(), creationflags=_NO_WINDOW)
+    except subprocess.TimeoutExpired as e:
+        raise ResearchError("Building the profile took too long; try again.") from e
+    try:
+        res = json.loads(r.stdout)
+    except ValueError as e:
+        raise ResearchError("Claude Code gave no answer for the profile step: %s" % (r.stderr or r.stdout)[-300:]) from e
+    if res.get("is_error"):
+        raise ResearchError(_cli_error(res))
+    j = res.get("structured_output")
+    if not isinstance(j, dict):
+        raise ResearchError("The profile answer didn't match the expected format; try again.")
+    return res, j
+
+
+def run_cli(scan, progress=lambda msg: None, cli=None):
+    cli = cli or cli_status(fresh=True)
+    if not cli:
+        raise ResearchError("Claude Code isn't installed (or its claude.exe isn't signed by Anthropic).")
+    if not cli["logged_in"]:
+        raise ResearchError("Claude Code isn't logged in. Run 'claude' in a terminal and use /login, then try again.")
+    summary = json.dumps(scan_summary(scan), indent=1)
+    workdir = tempfile.mkdtemp(prefix="headroom-research-")
+    try:
+        progress("Researching your parts on the web with Claude Code (takes a few minutes)")
+        res1, urls, searches, fetches = _run_cli_research(cli["path"], summary, progress, workdir)
+        notes = (res1.get("result") or "").strip()
+        if not notes:
+            raise ResearchError("The research step returned no findings.")
+        progress("Building your profile from %d sources" % len(urls))
+        src_list = "\n".join("- %s  (%s)" % (u, t) for u, t in urls.items()) or "(none)"
+        res2, j = _run_cli_structure(cli["path"], STRUCTURE_TASK.format(scan=summary, notes=notes, sources=src_list), workdir)
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+    usage = {"input_tokens": 0, "output_tokens": 0, "web_searches": searches, "web_fetches": fetches,
+             "cost_usd_equiv": round((res1.get("total_cost_usd") or 0) + (res2.get("total_cost_usd") or 0), 4),
+             "via": "Claude Code"}
+    for res in (res1, res2):
+        u = res.get("usage") or {}
+        usage["input_tokens"] += sum(u.get(k) or 0 for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
+        usage["output_tokens"] += u.get("output_tokens") or 0
+    allowed = set(urls)
+    out = to_profiles(j, allowed)
+    out.update(sources=sorted(allowed), when=time.strftime("%Y-%m-%d %H:%M"), model=MODEL, usage=usage, notes_text=notes)
+    return out
+
+
+def available():
+    """What 'Research my hardware' will use: "cli", "key" or None."""
+    c = cli_status()
+    if c and c["logged_in"]:
+        return "cli"
+    return "key" if has_key() else None
+
+
+def run(scan, progress=lambda msg: None):
+    """Claude Code login first, the API key second. Raises ResearchError."""
+    c = cli_status(fresh=True)
+    if c and c["logged_in"]:
+        return run_cli(scan, progress, c)
+    if has_key():
+        return run_api(scan, progress)
+    if c:
+        raise ResearchError("Claude Code isn't logged in. Run 'claude' in a terminal and use /login, then try again.")
+    raise ResearchError("Install Claude Code and log in (or add an Anthropic API key) to use research.")

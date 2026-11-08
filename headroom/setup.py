@@ -50,6 +50,8 @@ class Setup:
         prof = read_json(PROFILE_FILE)
         return {"needed": not prof, "scan": sc, "profile_sources": (prof or {}).get("_sources"),
                 "research": (prof or {}).get("_research"), "has_key": research.has_key(),
+                "claude_cli": research.cli_status(), "cli_checked": research.cli_checked(),
+                "research_via": research.available(),
                 "busy": self.busy, "progress": self.progress, "error": self.error,
                 "lhm": Lhm().poll(), "lhm_installed": bool(self._lhm_exe()),
                 "cooling": self._cooling(prof)}
@@ -108,8 +110,8 @@ class Setup:
         sc = read_json(SCAN_FILE)
         if not sc:
             raise RuntimeError("Scan the hardware first")
-        if not research.has_key():
-            raise RuntimeError("Add an Anthropic API key first")
+        if not research.available() and not research.cli_status(fresh=True):
+            raise RuntimeError("Install Claude Code and log in, or add an Anthropic API key")
 
         def go():
             def prog(m):
@@ -119,9 +121,11 @@ class Setup:
             self.last_research = r
             write_json(os.path.join(os.path.dirname(SCAN_FILE), "research.json"), r)
             u = r.get("usage") or {}
-            self.log("Research done: %d sources, %d web searches, %d pages, %d input / %d output tokens" % (
-                len(r["sources"]), u.get("web_searches", 0), u.get("web_fetches", 0),
-                u.get("input_tokens", 0), u.get("output_tokens", 0)))
+            self.log("Research done via %s: %d sources, %d web searches, %d pages, %d input / %d output tokens%s" % (
+                u.get("via", "?"), len(r["sources"]), u.get("web_searches", 0), u.get("web_fetches", 0),
+                u.get("input_tokens", 0), u.get("output_tokens", 0),
+                " (about $%.2f at API prices, counted against your Claude plan)" % u["cost_usd_equiv"]
+                if u.get("cost_usd_equiv") else ""))
             self._build(sc, r)
         self._bg("Researching with Claude", go)
 
