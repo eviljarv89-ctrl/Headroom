@@ -24,12 +24,15 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import threading
 import time
 import urllib.request
 
 from . import cpu_bench, uplift
-from .common import TOOLS_DIR, is_admin, ps, run, whea_events_since
+from .common import TOOLS_DIR, _resolve, is_admin, ps, run, whea_events_since
+
+CREATE_NEW_CONSOLE = 0x00000010
 
 CC_API = "https://api.github.com/repos/sp00n/CoreCycler/releases/latest"
 TASK = r"\CoreCycler\CoreCycler AutoMode Startup Task"
@@ -132,8 +135,13 @@ enableUpdateCheck = 0
 
 
 def launch_corecycler(cc):
+    """Start CoreCycler in its own console and return at once. It must not
+    inherit our pipes: run() with capture_output then waited on them for as long
+    as CoreCycler ran, so start_search never returned and the watchdog never armed."""
     bat = os.path.join(cc, "Run CoreCycler.bat")
-    run(["cmd.exe", "/c", "start", "", "/d", cc, bat], timeout=10)
+    subprocess.Popen([_resolve("cmd.exe"), "/c", bat], cwd=cc, stdin=subprocess.DEVNULL,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True,
+                     creationflags=CREATE_NEW_CONSOLE)
 
 
 def corecycler_running():

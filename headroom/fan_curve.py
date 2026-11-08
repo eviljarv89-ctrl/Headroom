@@ -50,11 +50,24 @@ def _read(path, default=None):
         return default
 
 
-def _write(path, d):
+def _write(path, d, strict=False):
+    """Atomic write. On Windows os.replace fails with access denied while another
+    process (the UI backend, the widget) has the target open for reading, so
+    retry briefly. If it is still locked, a status write (strict=False) is
+    skipped: a missed status update is harmless, a crashed fan daemon is not.
+    Config and boost writes (strict=True) raise so a lost save is never silent."""
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(d, f, indent=1)
-    os.replace(tmp, path)
+    for i in range(10):
+        try:
+            os.replace(tmp, path)
+            return True
+        except PermissionError:
+            if strict and i == 9:
+                raise
+            time.sleep(0.05 * (i + 1))
+    return False
 
 
 def _clean(points, lo_t, hi_t):
@@ -88,12 +101,12 @@ def save_config(cfg):
     c["enabled"] = bool(c["enabled"])
     c["core"] = _clean(c["core"], 20, 90) or DEFAULT["core"]
     c["mem"] = _clean(c["mem"], 30, 105) or DEFAULT["mem"]
-    _write(CONFIG_FILE, c)
+    _write(CONFIG_FILE, c, strict=True)
     return c
 
 
 def set_boost(pct, seconds=90):
-    _write(BOOST_FILE, {"pct": int(pct), "until": time.time() + seconds})
+    _write(BOOST_FILE, {"pct": int(pct), "until": time.time() + seconds}, strict=True)
 
 
 def clear_boost():
