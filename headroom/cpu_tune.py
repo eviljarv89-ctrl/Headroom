@@ -153,7 +153,8 @@ def kill_stress(cc, log, reason):
 
 _INC = re.compile(r"Increasing Curve Optimizer value for core (\d+)\D.*?from (-?\d+) to (-?\d+)")
 _ERR = re.compile(r"ERROR: At Core (\d+)")
-_CUR = re.compile(r"^\s*(?:Current values|CO values)\s+((?:-?\d+\s*\|?\s*)+)$")
+# one number, then "| number" / "number" repeats: each step must consume a separator, so no backtracking blow-up
+_CUR = re.compile(r"^\s*(?:Current values|CO values)\s+(-?\d+(?:[\s|]+-?\d+)*)[\s|]*$")
 
 
 def parse_results(cc, since, start_value, cores=8):
