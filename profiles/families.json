@@ -1,0 +1,164 @@
+{
+  "_about": "Generic per-family guidance used when there is no researched profile for the exact part. Ranges are deliberately conservative starting points, not measurements: Headroom's own tests decide the final values. Run 'Research my hardware' (Setup) for model-specific results with sources.",
+  "gpu": {
+    "nvidia-blackwell": {
+      "label": "NVIDIA RTX 50 series (Blackwell)",
+      "tuning_method": "Core + memory clock offsets via NVML. No voltage change; the card's firmware keeps its power limit.",
+      "typical": {"core_offset_mhz": [200, 400], "mem_offset_afterburner": [1000, 2500]},
+      "expected_uplift_pct": {"games": [4, 10], "games_typical": 6},
+      "safety": {"abort_core_c": 83, "warn_core_c": 78, "abort_mem_junction_c": 96, "warn_mem_junction_c": 90,
+                 "max_core_offset": 500, "max_mem_offset_reported_mhz": 3000,
+                 "notes": ["GDDR7 corrects errors by retrying, so an unstable memory offset shows up as LOWER bandwidth before it crashes. Headroom stops the memory search when bandwidth stops improving."]}
+    },
+    "nvidia-ada": {
+      "label": "NVIDIA RTX 40 series (Ada Lovelace)",
+      "tuning_method": "Core + memory clock offsets via NVML. No voltage change; the card's firmware keeps its power limit.",
+      "typical": {"core_offset_mhz": [100, 250], "mem_offset_afterburner": [500, 1500]},
+      "expected_uplift_pct": {"games": [2, 7], "games_typical": 4},
+      "safety": {"abort_core_c": 83, "warn_core_c": 78, "abort_mem_junction_c": 98, "warn_mem_junction_c": 92,
+                 "max_core_offset": 300, "max_mem_offset_reported_mhz": 2000,
+                 "notes": ["Ada cards usually run close to their limit out of the box; gains are smaller than on RTX 50."]}
+    },
+    "nvidia-ampere": {
+      "label": "NVIDIA RTX 30 series (Ampere)",
+      "tuning_method": "Core + memory clock offsets via NVML. No voltage change; the card's firmware keeps its power limit.",
+      "typical": {"core_offset_mhz": [50, 150], "mem_offset_afterburner": [500, 1000]},
+      "expected_uplift_pct": {"games": [2, 6], "games_typical": 3},
+      "safety": {"abort_core_c": 83, "warn_core_c": 78, "abort_mem_junction_c": 100, "warn_mem_junction_c": 94,
+                 "max_core_offset": 200, "max_mem_offset_reported_mhz": 1500,
+                 "notes": ["GDDR6X cards (3070 Ti/3080/3090) run hot memory; check the VRAM temperature in the Fans tab and keep the fan curve's VRAM side up."]}
+    },
+    "nvidia-turing": {
+      "label": "NVIDIA RTX 20 / GTX 16 series (Turing)",
+      "tuning_method": "Core + memory clock offsets via NVML, if the driver allows it on this card.",
+      "typical": {"core_offset_mhz": [50, 120], "mem_offset_afterburner": [300, 800]},
+      "expected_uplift_pct": {"games": [2, 6], "games_typical": 3},
+      "safety": {"abort_core_c": 83, "warn_core_c": 78, "abort_mem_junction_c": 96, "warn_mem_junction_c": 90,
+                 "max_core_offset": 200, "max_mem_offset_reported_mhz": 1000, "notes": []}
+    },
+    "nvidia-workstation": {
+      "label": "NVIDIA workstation / data-centre GPU",
+      "tuning_method": "Not tuned: workstation cards are validated at stock clocks. Monitoring and fan curve only.",
+      "typical": {"core_offset_mhz": [0, 0], "mem_offset_afterburner": [0, 0]},
+      "expected_uplift_pct": {"games": [0, 0], "games_typical": 0},
+      "safety": {"abort_core_c": 83, "warn_core_c": 78, "abort_mem_junction_c": 96, "warn_mem_junction_c": 90,
+                 "max_core_offset": 0, "max_mem_offset_reported_mhz": 0, "notes": []}
+    },
+    "nvidia-other": {
+      "label": "Other NVIDIA GPU",
+      "tuning_method": "Core + memory clock offsets via NVML, very conservative limits.",
+      "typical": {"core_offset_mhz": [0, 100], "mem_offset_afterburner": [0, 500]},
+      "expected_uplift_pct": {"games": [0, 4], "games_typical": 2},
+      "safety": {"abort_core_c": 80, "warn_core_c": 75, "abort_mem_junction_c": 95, "warn_mem_junction_c": 90,
+                 "max_core_offset": 150, "max_mem_offset_reported_mhz": 500, "notes": []}
+    },
+    "amd": {
+      "label": "AMD Radeon",
+      "tuning_method": "Not supported yet: Headroom's GPU tuning uses NVIDIA's NVML. Use AMD Software: Adrenalin Edition > Performance > Tuning (try 'Undervolt GPU' first).",
+      "typical": {}, "expected_uplift_pct": {"games": [0, 0], "games_typical": 0},
+      "safety": {"abort_core_c": 90, "warn_core_c": 85, "max_core_offset": 0, "max_mem_offset_reported_mhz": 0, "notes": []}
+    },
+    "intel": {
+      "label": "Intel Arc / integrated graphics",
+      "tuning_method": "Not supported: use Intel Graphics Software > Performance tuning.",
+      "typical": {}, "expected_uplift_pct": {"games": [0, 0], "games_typical": 0},
+      "safety": {"abort_core_c": 85, "warn_core_c": 80, "max_core_offset": 0, "max_mem_offset_reported_mhz": 0, "notes": []}
+    },
+    "unknown": {
+      "label": "Unknown GPU",
+      "tuning_method": "Not supported.",
+      "typical": {}, "expected_uplift_pct": {"games": [0, 0], "games_typical": 0},
+      "safety": {"abort_core_c": 80, "warn_core_c": 75, "max_core_offset": 0, "max_mem_offset_reported_mhz": 0, "notes": []}
+    }
+  },
+  "cpu": {
+    "amd-zen5-x3d": {
+      "label": "AMD Ryzen 9000X3D (Zen 5 + 3D V-Cache)",
+      "tuning_method": "PBO + per-core negative Curve Optimizer (found by CoreCycler) + Max Boost Clock Override. Power limits stay stock.",
+      "typical": {"co_per_core": [-10, -30], "boost_override_mhz": 200},
+      "expected_uplift_pct": {"single_thread": [2, 4], "multi_thread": [1, 4], "games_cpu_bound": [0, 3], "games_gpu_bound": [0, 1]},
+      "safety": {"abort_tdie_c": 90, "warn_tdie_c": 85, "platform_thermal_limit_c": 85,
+                 "notes": ["Don't raise PPT/TDC/EDC: the cache makes games barely clock-sensitive, so it only adds heat.", "Keep SoC voltage at or below 1.20 V (EXPO profiles can push it higher).", "Ryzen 9000 often freezes instead of rebooting on a bad Curve Optimizer value: press reset; CoreCycler resumes and raises that core by 1."]}
+    },
+    "amd-zen5": {
+      "label": "AMD Ryzen 9000 (Zen 5)",
+      "tuning_method": "PBO + per-core negative Curve Optimizer (found by CoreCycler) + Max Boost Clock Override. Power limits stay stock.",
+      "typical": {"co_per_core": [-10, -30], "boost_override_mhz": 200},
+      "expected_uplift_pct": {"single_thread": [2, 5], "multi_thread": [1, 5], "games_cpu_bound": [0, 3], "games_gpu_bound": [0, 1]},
+      "safety": {"abort_tdie_c": 90, "warn_tdie_c": 85, "platform_thermal_limit_c": 85,
+                 "notes": ["Headroom never raises PPT/TDC/EDC. On 65 W parts (9600X/9700X) most extra multi-thread performance would come from higher power limits, which Headroom deliberately leaves to you.", "Ryzen 9000 often freezes instead of rebooting on a bad Curve Optimizer value: press reset; CoreCycler resumes and raises that core by 1."]}
+    },
+    "amd-zen4-x3d": {
+      "label": "AMD Ryzen 7000X3D (Zen 4 + 3D V-Cache)",
+      "tuning_method": "Per-core negative Curve Optimizer only (found by CoreCycler). These chips don't allow a boost clock override.",
+      "typical": {"co_per_core": [-10, -30], "boost_override_mhz": 0},
+      "expected_uplift_pct": {"single_thread": [0, 3], "multi_thread": [1, 4], "games_cpu_bound": [0, 3], "games_gpu_bound": [0, 1]},
+      "safety": {"abort_tdie_c": 85, "warn_tdie_c": 80, "platform_thermal_limit_c": 80,
+                 "notes": ["Keep SoC voltage at or below 1.30 V; update the BIOS (2023 BIOS updates capped it after socket damage reports)."]}
+    },
+    "amd-zen4": {
+      "label": "AMD Ryzen 7000 (Zen 4)",
+      "tuning_method": "PBO + per-core negative Curve Optimizer (found by CoreCycler) + Max Boost Clock Override. Power limits stay stock.",
+      "typical": {"co_per_core": [-10, -30], "boost_override_mhz": 200},
+      "expected_uplift_pct": {"single_thread": [2, 5], "multi_thread": [2, 6], "games_cpu_bound": [0, 3], "games_gpu_bound": [0, 1]},
+      "safety": {"abort_tdie_c": 90, "warn_tdie_c": 85, "platform_thermal_limit_c": 85,
+                 "notes": ["Zen 4 is designed to run up to 95 C under heavy load; Headroom's 85 C limit is a quieter, cooler target."]}
+    },
+    "amd-zen3": {
+      "label": "AMD Ryzen 5000 (Zen 3)",
+      "tuning_method": "PBO + per-core negative Curve Optimizer (found by CoreCycler) + Max Boost Clock Override. Power limits stay stock.",
+      "typical": {"co_per_core": [-5, -20], "boost_override_mhz": 100},
+      "expected_uplift_pct": {"single_thread": [1, 4], "multi_thread": [2, 6], "games_cpu_bound": [0, 3], "games_gpu_bound": [0, 1]},
+      "safety": {"abort_tdie_c": 85, "warn_tdie_c": 80, "platform_thermal_limit_c": 85, "notes": []}
+    },
+    "amd-zen3-x3d": {
+      "label": "AMD Ryzen 5000X3D (Zen 3 + 3D V-Cache)",
+      "tuning_method": "Per-core negative Curve Optimizer only (if your BIOS exposes it); no boost override.",
+      "typical": {"co_per_core": [-10, -30], "boost_override_mhz": 0},
+      "expected_uplift_pct": {"single_thread": [0, 3], "multi_thread": [2, 5], "games_cpu_bound": [0, 3], "games_gpu_bound": [0, 1]},
+      "safety": {"abort_tdie_c": 85, "warn_tdie_c": 80, "platform_thermal_limit_c": 80, "notes": []}
+    },
+    "amd-zen2": {
+      "label": "AMD Ryzen 3000 (Zen 2)",
+      "tuning_method": "Not supported: Curve Optimizer doesn't exist on Zen 2. Monitoring and benchmark only.",
+      "typical": {}, "expected_uplift_pct": {"single_thread": [0, 0], "multi_thread": [0, 0], "games_cpu_bound": [0, 0], "games_gpu_bound": [0, 0]},
+      "safety": {"abort_tdie_c": 85, "warn_tdie_c": 80, "notes": []}
+    },
+    "intel-raptorlake": {
+      "label": "Intel Core 13th/14th gen (Raptor Lake)",
+      "tuning_method": "No automatic tuning. Most important: update the BIOS to the latest microcode (0x12B or newer) and use Intel's default power profile, which fixes the 13th/14th gen degradation issue.",
+      "typical": {}, "expected_uplift_pct": {"single_thread": [0, 0], "multi_thread": [0, 0], "games_cpu_bound": [0, 0], "games_gpu_bound": [0, 0]},
+      "safety": {"abort_tdie_c": 95, "warn_tdie_c": 90, "notes": ["Do not raise voltage or power limits on 13th/14th gen."]}
+    },
+    "intel-arrowlake": {
+      "label": "Intel Core Ultra 200S (Arrow Lake)",
+      "tuning_method": "No automatic tuning. Intel's '200S Boost' BIOS profile (where offered) is the supported overclock and keeps the warranty.",
+      "typical": {}, "expected_uplift_pct": {"single_thread": [0, 0], "multi_thread": [0, 0], "games_cpu_bound": [0, 0], "games_gpu_bound": [0, 0]},
+      "safety": {"abort_tdie_c": 95, "warn_tdie_c": 90, "notes": []}
+    },
+    "intel-alderlake": {
+      "label": "Intel Core 12th gen (Alder Lake)",
+      "tuning_method": "No automatic tuning.",
+      "typical": {}, "expected_uplift_pct": {"single_thread": [0, 0], "multi_thread": [0, 0], "games_cpu_bound": [0, 0], "games_gpu_bound": [0, 0]},
+      "safety": {"abort_tdie_c": 95, "warn_tdie_c": 90, "notes": []}
+    },
+    "other": {
+      "label": "Other CPU",
+      "tuning_method": "No automatic tuning. Monitoring and benchmark only.",
+      "typical": {}, "expected_uplift_pct": {"single_thread": [0, 0], "multi_thread": [0, 0], "games_cpu_bound": [0, 0], "games_gpu_bound": [0, 0]},
+      "safety": {"abort_tdie_c": 90, "warn_tdie_c": 85, "notes": []}
+    }
+  },
+  "board": {
+    "asus": {"label": "ASUS", "bios_key": "F7 for Advanced Mode", "pbo_path": "Advanced > AMD Overclocking > (Accept) > Precision Boost Overdrive",
+             "thermal_limit_name": "Platform Thermal Throttle Limit"},
+    "msi": {"label": "MSI", "bios_key": "F7 for Advanced mode", "pbo_path": "OC > Advanced CPU Configuration > AMD Overclocking > Precision Boost Overdrive",
+            "thermal_limit_name": "Platform Thermal Throttle Limit (PBO page)"},
+    "gigabyte": {"label": "Gigabyte", "bios_key": "F2 for Advanced Mode", "pbo_path": "Tweaker > Advanced CPU Settings > Precision Boost Overdrive (or Settings > AMD Overclocking)",
+                 "thermal_limit_name": "Platform Thermal Throttle Limit / Thermal Limit"},
+    "asrock": {"label": "ASRock", "bios_key": "F6 for Advanced Mode", "pbo_path": "Advanced > AMD Overclocking > Precision Boost Overdrive (or OC Tweaker)",
+               "thermal_limit_name": "Platform Thermal Throttle Limit"},
+    "other": {"label": "your motherboard", "bios_key": "the BIOS advanced mode", "pbo_path": "look for 'AMD Overclocking' > 'Precision Boost Overdrive'",
+              "thermal_limit_name": "Platform Thermal Throttle Limit"}
+  }
+}

@@ -1,0 +1,202 @@
+"""First-run setup: hardware scan -> profile (built-in / family, or Claude research)
+-> sensor app check -> cooling headers. Re-runnable from the Setup tab."""
+import json
+import os
+import shutil
+import subprocess
+import threading
+import time
+import urllib.request
+import zipfile
+
+from . import profiles, research, scan as hwscan
+from .common import PROFILE_FILE, SCAN_FILE, TOOLS_DIR, read_json, run, write_json
+from .sensors import Lhm
+
+LHM_API = "https://api.github.com/repos/LibreHardwareMonitor/LibreHardwareMonitor/releases/latest"
+LHM_TASK = "Headroom Sensors"
+UA = {"User-Agent": "Headroom-setup", "Accept": "application/vnd.github+json"}
+
+LHM_CONFIG = """<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <appSettings>
+    <add key="startMinMenuItem" value="true" />
+    <add key="minTrayMenuItem" value="true" />
+    <add key="minCloseMenuItem" value="true" />
+    <add key="runWebServerMenuItem" value="true" />
+    <add key="listenerIp" value="127.0.0.1" />
+    <add key="listenerPort" value="8085" />
+  </appSettings>
+</configuration>
+"""
+
+
+def _parts(sc):
+    return [(sc.get("cpu") or {}).get("name"), (sc.get("gpu") or {}).get("name"), (sc.get("board") or {}).get("model")]
+
+
+class Setup:
+    def __init__(self, log, on_profile_changed):
+        self.log = log
+        self.on_profile_changed = on_profile_changed
+        self.busy = None
+        self.progress = ""
+        self.error = None
+        self.last_research = None
+
+    # ------------------------------------------------------------- status
+    def status(self):
+        sc = read_json(SCAN_FILE)
+        prof = read_json(PROFILE_FILE)
+        return {"needed": not prof, "scan": sc, "profile_sources": (prof or {}).get("_sources"),
+                "research": (prof or {}).get("_research"), "has_key": research.has_key(),
+                "busy": self.busy, "progress": self.progress, "error": self.error,
+                "lhm": Lhm().poll(), "lhm_installed": bool(self._lhm_exe()),
+                "cooling": self._cooling(prof)}
+
+    @staticmethod
+    def _cooling(prof):
+        c = next(iter(((prof or {}).get("cooler") or {}).values()), {})
+        return {"pump_sensor": c.get("pump_sensor"), "radiator_sensor": c.get("radiator_sensor"),
+                "pump_min_rpm": (c.get("preflight") or {}).get("pump_min_rpm")}
+
+    def _bg(self, label, fn):
+        if self.busy:
+            raise RuntimeError("Setup is busy: " + self.busy)
+        self.busy, self.error, self.progress = label, None, label
+
+        def wrap():
+            try:
+                fn()
+            except Exception as e:  # noqa: BLE001
+                self.error = str(e)
+                self.log("Setup: %s" % e, "error")
+            finally:
+                self.busy = None
+        threading.Thread(target=wrap, daemon=True).start()
+
+    # ------------------------------------------------------------- scan + profile
+    def run_scan(self, then_build=True):
+        def go():
+            self.progress = "Scanning hardware"
+            sc = hwscan.scan(self.log)
+            if then_build:
+                self._build(sc)
+        self._bg("Scanning hardware", go)
+
+    def _build(self, sc, res=None):
+        prof_old = read_json(PROFILE_FILE) or {}
+        cool = self._cooling(prof_old)
+        if res is None:
+            # keep earlier research if it was for the same parts (e.g. a re-scan after installing sensors)
+            old = read_json(os.path.join(os.path.dirname(SCAN_FILE), "research.json"))
+            if old and old.get("parts") == _parts(sc):
+                res = old
+        p = profiles.build(sc, research=res, cooling=cool)
+        profiles.save(p)
+        self.log("Profile built: GPU from %s, CPU from %s, board from %s data" % (
+            p["_sources"].get("gpu"), p["_sources"].get("cpu"), p["_sources"].get("board")))
+        self.on_profile_changed()
+
+    def rebuild(self):
+        sc = read_json(SCAN_FILE)
+        if not sc:
+            return self.run_scan()
+        self._bg("Building profile", lambda: self._build(sc))
+
+    def run_research(self):
+        sc = read_json(SCAN_FILE)
+        if not sc:
+            raise RuntimeError("Scan the hardware first")
+        if not research.has_key():
+            raise RuntimeError("Add an Anthropic API key first")
+
+        def go():
+            def prog(m):
+                self.progress = m
+            r = research.run(sc, prog)
+            r["parts"] = _parts(sc)
+            self.last_research = r
+            write_json(os.path.join(os.path.dirname(SCAN_FILE), "research.json"), r)
+            u = r.get("usage") or {}
+            self.log("Research done: %d sources, %d web searches, %d pages, %d input / %d output tokens" % (
+                len(r["sources"]), u.get("web_searches", 0), u.get("web_fetches", 0),
+                u.get("input_tokens", 0), u.get("output_tokens", 0)))
+            self._build(sc, r)
+        self._bg("Researching with Claude", go)
+
+    def set_key(self, key):
+        research.save_key(key)
+        self.log("Anthropic API key %s" % ("saved (encrypted for this Windows user)" if key else "removed"))
+
+    def set_cooling(self, body):
+        prof = read_json(PROFILE_FILE)
+        if not prof:
+            raise RuntimeError("Run setup first")
+        name = next(iter(prof.get("cooler") or {}), "CPU cooler")
+        c = (prof.get("cooler") or {}).get(name) or {}
+        c["pump_sensor"] = body.get("pump_sensor") or None
+        c["radiator_sensor"] = body.get("radiator_sensor") or None
+        c.setdefault("preflight", {})["pump_min_rpm"] = int(body.get("pump_min_rpm") or 1000)
+        prof["cooler"] = {name: c}
+        profiles.save(prof)
+        self.log("Cooling check: pump %s, CPU fans %s" % (c["pump_sensor"] or "not watched", c["radiator_sensor"] or "not watched"))
+        self.on_profile_changed()
+
+    # ------------------------------------------------------------- LibreHardwareMonitor
+    @staticmethod
+    def _lhm_exe():
+        p = os.path.join(TOOLS_DIR, "LibreHardwareMonitor", "LibreHardwareMonitor.exe")
+        return p if os.path.isfile(p) else None
+
+    def install_lhm(self):
+        def go():
+            if Lhm().poll():
+                self.log("LibreHardwareMonitor is already running with its web server: nothing to do")
+                return
+            exe = self._lhm_exe()
+            if not exe:
+                self.progress = "Downloading LibreHardwareMonitor"
+                with urllib.request.urlopen(urllib.request.Request(LHM_API, headers=UA), timeout=30) as r:
+                    rel = json.loads(r.read().decode())
+                assets = [a for a in rel.get("assets", []) if a["name"].lower().endswith(".zip")]
+                assets.sort(key=lambda a: ("net4" in a["name"].lower(), len(a["name"])))   # prefer the main build
+                if not assets:
+                    raise RuntimeError("No download found in the latest LibreHardwareMonitor release")
+                dl = os.path.join(TOOLS_DIR, "_dl")
+                os.makedirs(dl, exist_ok=True)
+                zpath = os.path.join(dl, assets[0]["name"])
+                with urllib.request.urlopen(urllib.request.Request(assets[0]["browser_download_url"], headers=UA), timeout=180) as r, \
+                        open(zpath, "wb") as f:
+                    shutil.copyfileobj(r, f)
+                dest = os.path.join(TOOLS_DIR, "LibreHardwareMonitor")
+                shutil.rmtree(dest, ignore_errors=True)
+                with zipfile.ZipFile(zpath) as z:
+                    z.extractall(dest)
+                # some releases nest everything in one folder
+                hits = [os.path.join(dp, "LibreHardwareMonitor.exe") for dp, _, fs in os.walk(dest) if "LibreHardwareMonitor.exe" in fs]
+                if not hits:
+                    raise RuntimeError("LibreHardwareMonitor.exe not found in the download")
+                if os.path.dirname(hits[0]) != dest:
+                    inner = os.path.dirname(hits[0])
+                    for n in os.listdir(inner):
+                        shutil.move(os.path.join(inner, n), os.path.join(dest, n))
+                exe = os.path.join(dest, "LibreHardwareMonitor.exe")
+                self.log("LibreHardwareMonitor %s installed to %s" % (rel.get("tag_name", ""), dest))
+            cfg = os.path.join(os.path.dirname(exe), "LibreHardwareMonitor.config")
+            if not os.path.isfile(cfg):
+                with open(cfg, "w", encoding="utf-8") as f:
+                    f.write(LHM_CONFIG)
+            run(["schtasks", "/create", "/f", "/rl", "highest", "/sc", "onlogon", "/tn", LHM_TASK, "/tr", '"%s"' % exe])
+            subprocess.Popen([exe], cwd=os.path.dirname(exe), creationflags=0x00000008 | 0x00000200, close_fds=True)
+            self.progress = "Waiting for the sensor web server"
+            for _ in range(40):
+                time.sleep(1)
+                if Lhm().poll():
+                    self.log("Sensors online (LibreHardwareMonitor, starts at logon)")
+                    sc = hwscan.scan(self.log)
+                    self._build(sc)
+                    return
+            raise RuntimeError("LibreHardwareMonitor started but its web server didn't answer on port 8085. "
+                               "If it asked to install PawnIO, accept and press this button again.")
+        self._bg("Installing sensors", go)

@@ -1,0 +1,82 @@
+{
+  "_about": "Researched profile (web sources listed), compiled 2026-11-07. Shipped with Headroom.",
+  "_source": "builtin",
+  "section": "gpu",
+  "name": "NVIDIA GeForce RTX 5070 Ti",
+  "profile": {
+    "board": "MSI (PCI subsystem 1462:5310). 300 W default = 300 W max, so this is a locked-power MSI model (Ventus 3X OC, Ventus 3X PZ OC or Shadow 3X OC all ship like this); check the box/sticker for the exact SKU.",
+    "chip": "GB203-300 Blackwell, 8,960 CUDA cores, 16 GB GDDR7 28 Gbps, 256-bit (896 GB/s)",
+    "stock": {
+      "boost_mhz": 2482,
+      "max_vf_mhz": 3090,
+      "mem_mhz_reported": 14001,
+      "power_w": 300,
+      "power_max_w": 300
+    },
+    "tuning_method": "Core + memory clock offsets via NVML (no voltage change; power stays capped at 300 W by the card's firmware). Optional 'efficiency mode' clock cap = undervolt-like result.",
+    "community_results": [
+      {
+        "source": "KitGuru (MSI Ventus 3X OC)",
+        "settings": "+420 core, memory slider maxed, power not adjustable",
+        "result": "~3,150 MHz real clock; +12% Cyberpunk 2077, +7% Plague Tale Requiem, +9% Hellblade 2; power unchanged"
+      },
+      {
+        "source": "Igor's Lab",
+        "settings": "+300 core, +2000 memory",
+        "result": "best stable on their sample"
+      },
+      {
+        "source": "KitGuru (MSI Vanguard SOC)",
+        "settings": "manual OC",
+        "result": "+5% Cyberpunk, +7% Plague Tale, +11% Hellblade 2"
+      },
+      {
+        "source": "TweakTown / HotHardware",
+        "settings": "+5500 memory via mVolt mod (Gigabyte)",
+        "result": "39 Gbps (+40% bandwidth) but only ~1 fps per +1000 MHz in Cyberpunk: memory OC past +3000 is not worth it"
+      },
+      {
+        "source": "TechPowerUp forum",
+        "settings": "-",
+        "result": "Ventus base model OC is held back by the hard 300 W power limit"
+      }
+    ],
+    "typical": {
+      "core_offset_mhz": [
+        250,
+        450
+      ],
+      "mem_offset_afterburner": [
+        1500,
+        3000
+      ]
+    },
+    "expected_uplift_pct": {
+      "games": [
+        5,
+        12
+      ],
+      "games_typical": 8
+    },
+    "safety": {
+      "abort_core_c": 83,
+      "warn_core_c": 78,
+      "abort_mem_junction_c": 96,
+      "warn_mem_junction_c": 90,
+      "max_core_offset": 500,
+      "max_mem_offset_reported_mhz": 3000,
+      "notes": [
+        "Offsets don't raise voltage or power: the 300 W cap is enforced by the card, so an overclock here can crash a game but cannot cook the GPU.",
+        "GDDR7 corrects errors by retrying, so a too-high memory offset shows up as LOST performance before it crashes. Headroom stops when bandwidth drops."
+      ]
+    },
+    "sources": [
+      "https://www.kitguru.net/components/graphic-cards/dominic-moass/msi-rtx-5070-ti-ventus-3x-oc-review/39/",
+      "https://www.kitguru.net/components/graphic-cards/dominic-moass/msi-rtx-5070-ti-vanguard-soc-review/10/",
+      "https://techpowerup.com/review/msi-geforce-rtx-5070-ti-ventus-3x/45.html",
+      "https://www.thefpsreview.com/2025/12/15/msi-project-zero-msi-geforce-rtx-5070-ti-16g-ventus-3x-pz-oc-video-card-review/3",
+      "https://www.tweaktown.com/news/113811/gddr7-overclocked-to-a-whopping-39gbps-through-mvolt-plus-representing-a-40-percent-bandwidth-increase-on-an-rtx-5070-ti",
+      "https://forums.developer.nvidia.com/t/nvmldevicegetminmaxclockofpstate-nvmldevicesetclockoffsets-issues/318332"
+    ]
+  }
+}

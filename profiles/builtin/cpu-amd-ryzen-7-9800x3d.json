@@ -1,0 +1,99 @@
+{
+  "_about": "Researched profile (web sources listed), compiled 2026-11-07. Shipped with Headroom.",
+  "_source": "builtin",
+  "section": "cpu",
+  "name": "AMD Ryzen 7 9800X3D",
+  "profile": {
+    "arch": "Zen 5 (Granite Ridge), 8C/16T, 96 MB L3 (2nd-gen 3D V-Cache, under the cores: full multiplier/PBO unlocked, unlike 7800X3D)",
+    "stock": {
+      "base_mhz": 4700,
+      "boost_mhz": 5200,
+      "tdp_w": 120,
+      "ppt_w": 162,
+      "tdc_a": 120,
+      "edc_a": 180,
+      "tjmax_c": 95
+    },
+    "tuning_method": "PBO + per-core Curve Optimizer (negative) + Max Boost Clock Override. Set in BIOS; Headroom finds the CO values at runtime with CoreCycler (PawnIO), which are temporary until entered in BIOS.",
+    "community_results": [
+      {
+        "source": "TechPowerUp review",
+        "settings": "PBO limits removed, +200 MHz, scalar 10x, CO -10 all-core",
+        "result": "+200 MHz boost ceiling, stable; small app gains"
+      },
+      {
+        "source": "Reddit r/overclocking (May 2025)",
+        "settings": "stock PBO auto",
+        "result": "CB R23 22,689 MT / 2,054 ST, 5.2 GHz all-core"
+      },
+      {
+        "source": "Reddit r/overclocking (May 2025)",
+        "settings": "+200, CO -20",
+        "result": "CB R23 22,837-23,517 MT / 2,142-2,144 ST; +200 was not stable at light all-core loads for that chip, +125 used"
+      },
+      {
+        "source": "smzdm (X870E Aorus Pro ICE)",
+        "settings": "+200, CO -30 all-core",
+        "result": "CB R23 23,006 MT / 2,154 ST at 5,425 MHz, ~144 W package"
+      },
+      {
+        "source": "Igor's Lab",
+        "settings": "+200 with negative CO",
+        "result": "LOWER power than stock thanks to CO; gain is mostly efficiency"
+      },
+      {
+        "source": "NoobFeed (CO -25, three X3D chips)",
+        "settings": "CO -25",
+        "result": "big chip-to-chip variation; Cyberpunk 1440p ~+1 fps; can hurt 1% lows if unstable"
+      }
+    ],
+    "typical": {
+      "co_per_core": [
+        -15,
+        -30
+      ],
+      "co_golden": -40,
+      "boost_override_mhz": 200,
+      "fmax_tuned_mhz": 5425
+    },
+    "expected_uplift_pct": {
+      "single_thread": [
+        3,
+        5
+      ],
+      "multi_thread": [
+        1,
+        4
+      ],
+      "games_cpu_bound": [
+        0,
+        3
+      ],
+      "games_gpu_bound": [
+        0,
+        1
+      ]
+    },
+    "safety": {
+      "abort_tdie_c": 90,
+      "warn_tdie_c": 85,
+      "keep_ppt_stock": true,
+      "max_soc_v": 1.2,
+      "platform_thermal_limit_c": 85,
+      "notes": [
+        "Do NOT raise PPT/TDC/EDC: on an X3D part the gain is ~0 and it only adds heat.",
+        "Keep VSOC at or below 1.20 V (EXPO can push it to 1.25-1.30 V). The 2025 '9800X3D burned socket' reports were mostly ASRock boards with high SoC power; keep the ASUS BIOS updated.",
+        "Platform Thermal Throttle Limit = 85 C is a hardware-level ceiling: the CPU itself clocks down before it can cook, whatever any software does.",
+        "Ryzen 9000 often FREEZES instead of rebooting on a bad CO value: press reset; CoreCycler resumes and raises that core by 1."
+      ]
+    },
+    "sources": [
+      "https://techpowerup.com/review/amd-ryzen-7-9800x3d/30.html",
+      "https://www.igorslab.de/en/amd-ryzen-7-9800x3d-in-gaming-test-overclocked-undervolted-and-found-to-be-good/8/",
+      "https://www.noobfeed.com/hardware/amd-ryzen-7-9850x3d-review-incremental-gains",
+      "https://reddit.birdcat.cafe/r/overclocking/comments/1ki7tn8/9800x3d_max_68c",
+      "https://post.smzdm.com/p/awmor9gp",
+      "https://github.com/sp00n/CoreCycler/releases"
+    ]
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "_about": "Researched profile (web sources listed), compiled 2026-11-07. Shipped with Headroom.",
+  "_source": "builtin",
+  "section": "board",
+  "name": "ROG STRIX B650E-F GAMING WIFI",
+  "profile": {
+    "pbo_path": "Advanced > AMD Overclocking > (Accept) > Precision Boost Overdrive",
+    "settings_to_enter": [
+      [
+        "Precision Boost Overdrive",
+        "Advanced"
+      ],
+      [
+        "PBO Limits",
+        "Auto (stock 162 W / 120 A / 180 A)"
+      ],
+      [
+        "Precision Boost Overdrive Scalar",
+        "Auto"
+      ],
+      [
+        "CPU Boost Clock Override",
+        "Enabled (Positive)"
+      ],
+      [
+        "Max CPU Boost Clock Override(+)",
+        "200 (lower to 150/100 if light-load crashes)"
+      ],
+      [
+        "Platform Thermal Throttle Limit",
+        "Manual, 85"
+      ],
+      [
+        "Curve Optimizer",
+        "Per Core"
+      ],
+      [
+        "Core 0..7 Curve Optimizer Sign / Magnitude",
+        "Negative / values from Headroom"
+      ]
+    ],
+    "also": "Ai Tweaker > Precision Boost Overdrive / PBO Enhancement: leave Disabled/Auto so it doesn't override the above."
+  }
+}

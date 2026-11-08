@@ -1,0 +1,16 @@
+# build output
+dist/
+*.exe
+!installer/*.cs
+# downloaded at build time (installer/build.ps1)
+Microsoft.Web.WebView2.Core.dll
+Microsoft.Web.WebView2.WinForms.dll
+WebView2Loader.dll
+vendor/
+# runtime / local
+__pycache__/
+*.pyc
+.ruff_cache/
+tools/
+dev/selftest_result.txt
+selftest_result.txt
