@@ -8,8 +8,7 @@ and a 64-bit Python 3.12 to copy the runtime from (python.org installer or `wing
 param(
     [string]$Version = "1.0.0",
     [string]$Python = "",
-    [string]$WebView2Version = "1.0.4314.35",
-    [string]$AnthropicVersion = "2.6.0"
+    [string]$WebView2Version = "1.0.4314.35"
 )
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
@@ -29,16 +28,32 @@ $pyver = (& $Python -c "import sys,struct; print('%d.%d %d' % (sys.version_info[
 if ($pyver -ne "3.12 64") { throw "Need 64-bit Python 3.12, got $pyver ($Python)" }
 $pyhome = Split-Path -Parent $Python
 
-# ---- WebView2 SDK (NuGet) -> repo root, next to Headroom.exe
+# ---- WebView2 SDK (NuGet) -> repo root, next to Headroom.exe. Pinned by hash: the build stops on a mismatch.
+$wvHash = @{
+    "microsoft.web.webview2.1.0.4314.35.nupkg" = "90778DEB1B77E36292828B4B5833C9255C27533F40E0DDD55891AE718944EDC4"
+    "Microsoft.Web.WebView2.Core.dll"          = "ACDD517B951829F763D1255F32DF1E6A936CB8623A7EBFF6B8B24172DEDE6BD6"
+    "Microsoft.Web.WebView2.WinForms.dll"      = "C66437F80886AECF074804B61AF4CC10AD90A95310C8E0A717F31EA377C26B03"
+    "WebView2Loader.dll"                       = "D3FCE90BDEECB08596E377DEA6A316354DD8949E32FF09B89D51BE00C14E21B6"
+}
+function CheckHash($path) {
+    $want = $wvHash[(Split-Path -Leaf $path)]
+    if (-not $want) { throw "No pinned hash for $path (update `$wvHash when changing -WebView2Version)" }
+    $got = (Get-FileHash $path -Algorithm SHA256).Hash
+    if ($got -ne $want) { throw "Hash mismatch for ${path}: $got (expected $want)" }
+}
 $wv = @("Microsoft.Web.WebView2.Core.dll", "Microsoft.Web.WebView2.WinForms.dll", "WebView2Loader.dll")
 if (($wv | Where-Object { -not (Test-Path (Join-Path $root $_)) }).Count) {
     Step "Downloading WebView2 SDK $WebView2Version from NuGet"
     $tmp = Join-Path $env:TEMP "wv2-$WebView2Version"
-    $nupkg = "$tmp.zip"
+    $nupkg = Join-Path $env:TEMP "microsoft.web.webview2.$WebView2Version.nupkg"
     Invoke-WebRequest -UseBasicParsing "https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/$WebView2Version/microsoft.web.webview2.$WebView2Version.nupkg" -OutFile $nupkg
-    Expand-Archive $nupkg $tmp -Force
+    CheckHash $nupkg
+    Copy-Item $nupkg "$tmp.zip" -Force
+    Expand-Archive "$tmp.zip" $tmp -Force
     Copy-Item "$tmp\lib\net462\Microsoft.Web.WebView2.Core.dll", "$tmp\lib\net462\Microsoft.Web.WebView2.WinForms.dll", "$tmp\runtimes\win-x64\native\WebView2Loader.dll" $root
 }
+
+foreach ($f in $wv) { CheckHash (Join-Path $root $f) }
 
 # ---- Headroom.exe (built into dist\, so a copy running from the checkout doesn't block the build)
 Step "Compiling Headroom.exe"
@@ -78,9 +93,10 @@ if ($LASTEXITCODE -ge 8) { throw "Copying the Python library failed" }
 New-Item -ItemType Directory "$rt\Lib\site-packages" | Out-Null
 Set-Content "$rt\python312._pth" "Lib`r`nDLLs`r`n..\vendor" -Encoding ASCII
 
-# ---- Anthropic SDK (for 'Research my hardware')
-Step "Installing anthropic==$AnthropicVersion into vendor\"
-& $Python -m pip install --disable-pip-version-check --no-warn-script-location --quiet --target (Join-Path $stage "vendor") "anthropic==$AnthropicVersion"
+# ---- Anthropic SDK (for 'Research my hardware'): exact versions, hash-checked (installer\requirements.txt)
+Step "Installing pinned packages into vendor\"
+& $Python -m pip install --disable-pip-version-check --no-warn-script-location --quiet --no-deps --only-binary=:all: `
+    --require-hashes -r (Join-Path $PSScriptRoot "requirements.txt") --target (Join-Path $stage "vendor")
 if ($LASTEXITCODE) { throw "pip install failed" }
 Get-ChildItem (Join-Path $stage "vendor") -Directory -Filter "bin" | Remove-Item -Recurse -Force
 

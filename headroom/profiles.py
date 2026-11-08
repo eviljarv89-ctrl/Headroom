@@ -197,5 +197,34 @@ def build(scan, research=None, cooling=None):
 
 
 def save(profile):
+    profile = clamp_all(profile)
     write_json(PROFILE_FILE, profile)
     return profile
+
+
+def _sanitize(v, key=""):
+    """Profile text can come from web research: no markup, and links must be plain https."""
+    if isinstance(v, str):
+        if key in ("url", "source_url") or key.endswith("_url"):
+            return v if re.match(r"^https://[^\s\"'<>]+$", v) else ""
+        return v.replace("<", "\u2039").replace(">", "\u203a")
+    if isinstance(v, list):
+        if key == "sources":
+            return [u for u in v if isinstance(u, str) and re.match(r"^https://[^\s\"'<>]+$", u)]
+        return [_sanitize(x) for x in v]
+    if isinstance(v, dict):
+        return {(_sanitize(k) if isinstance(k, str) else k): _sanitize(x, k if isinstance(k, str) else "") for k, x in v.items()}
+    return v
+
+
+def clamp_all(prof):
+    """Re-apply the hard caps to a profile read from disk (profile.json is user-writable)."""
+    if not isinstance(prof, dict):
+        return {}
+    out = _sanitize(prof)
+    if isinstance(out.get("gpu"), dict):
+        out["gpu"] = {k: clamp_gpu(v) for k, v in out["gpu"].items() if isinstance(v, dict)}
+    if isinstance(out.get("cpu"), dict):
+        out["cpu"] = {k: clamp_cpu(v, v.get("vendor") or ("intel" if "intel" in k.lower() else "amd"))
+                      for k, v in out["cpu"].items() if isinstance(v, dict)}
+    return out

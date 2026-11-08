@@ -13,6 +13,8 @@ using System.IO.Compression;
 using System.Net;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Threading;
 using System.Windows.Forms;
 using Microsoft.Win32;
@@ -26,9 +28,15 @@ static class App
     public static string Version = "1.0.0";
     public static string DefaultDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), Name);
 
+    [DllImport("kernel32.dll")] static extern bool SetDefaultDllDirectories(uint flags);
+    [DllImport("user32.dll")] static extern IntPtr FindWindow(string cls, string title);
+    [DllImport("user32.dll")] static extern IntPtr PostMessage(IntPtr h, int msg, IntPtr w, IntPtr l);
+
     [STAThread]
     static int Main(string[] args)
     {
+        // an installer usually runs from Downloads: never load DLLs from the folder it sits in
+        try { SetDefaultDllDirectories(0x00000800); } catch { }
         try
         {
             using (var s = Assembly.GetExecutingAssembly().GetManifestResourceStream("version.txt"))
@@ -65,9 +73,13 @@ static class App
 
     public static void Stop(string dir)
     {
-        // ask a running Headroom to shut down cleanly (it puts the fan curve process to rest too)
-        try { var wc = new TimeoutClient(); wc.UploadString("http://127.0.0.1:7871/api/shutdown", "{}"); } catch { }
-        Thread.Sleep(1500);
+        // close a running Headroom window the normal way: it stops any test and shuts its backend down
+        var h = FindWindow(null, "Headroom");
+        if (h != IntPtr.Zero)
+        {
+            PostMessage(h, 0x0010 /* WM_CLOSE */, IntPtr.Zero, IntPtr.Zero);
+            for (int i = 0; i < 50 && Process.GetProcessesByName("Headroom").Length > 0; i++) Thread.Sleep(500);
+        }
         foreach (var p in Process.GetProcesses())
         {
             try
@@ -108,9 +120,26 @@ static class App
     public static string DesktopLnk { get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory), "Headroom.lnk"); } }
 }
 
-class TimeoutClient : WebClient
+static class Acl
 {
-    protected override WebRequest GetWebRequest(Uri u) { var r = base.GetWebRequest(u); r.Timeout = 3000; return r; }
+    static readonly SecurityIdentifier Admins = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
+    static readonly SecurityIdentifier System_ = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
+    static readonly SecurityIdentifier Users = new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null);
+
+    // Only admins can change the folder; users may read and run. Headroom runs elevated from here,
+    // so a folder ordinary programs could write to would let them gain admin rights.
+    public static void Lock(string dir, bool usersRead)
+    {
+        var ds = new DirectorySecurity();
+        ds.SetOwner(Admins);
+        ds.SetAccessRuleProtection(true, false);
+        var inh = InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit;
+        ds.AddAccessRule(new FileSystemAccessRule(Admins, FileSystemRights.FullControl, inh, PropagationFlags.None, AccessControlType.Allow));
+        ds.AddAccessRule(new FileSystemAccessRule(System_, FileSystemRights.FullControl, inh, PropagationFlags.None, AccessControlType.Allow));
+        if (usersRead)
+            ds.AddAccessRule(new FileSystemAccessRule(Users, FileSystemRights.ReadAndExecute, inh, PropagationFlags.None, AccessControlType.Allow));
+        Directory.SetAccessControl(dir, ds);
+    }
 }
 
 static class Installer
@@ -150,6 +179,8 @@ static class Installer
         var oldPy = Path.Combine(dir, @"runtime\python.exe");   // upgrade: the fan curve process was stopped, hand fans back
         if (File.Exists(oldPy) && File.Exists(Path.Combine(dir, "headroom_reset.pyw")))
             App.Run(oldPy, "\"" + Path.Combine(dir, "headroom_reset.pyw") + "\" --fans-only", 20000);
+        Directory.CreateDirectory(dir);
+        Acl.Lock(dir, true);   // also covers a custom folder picked with /D= or Browse
         Extract(dir, progress);
         progress(88, "Creating shortcuts");
         var self = Assembly.GetExecutingAssembly().Location;
@@ -207,12 +238,18 @@ static class Uninstaller
         if (dir == null)
         {
             dir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
-            // can't delete our own folder while running from it: continue from a temp copy
-            var tmp = Path.Combine(Path.GetTempPath(), "HeadroomUninstall.exe");
+            // can't delete our own folder while running from it: continue from a temp copy, in a
+            // folder only admins can write to (the user's %TEMP% would let other programs plant DLLs)
+            var tdir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "Temp", "HeadroomUninstall-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tdir);
+            Acl.Lock(tdir, false);
+            var tmp = Path.Combine(tdir, "HeadroomUninstall.exe");
             File.Copy(Assembly.GetExecutingAssembly().Location, tmp, true);
             Process.Start(new ProcessStartInfo(tmp, "/uninstall /dir \"" + dir + "\"" + (silent ? " /S" : "") + (removeData ? " /removedata" : "")) { UseShellExecute = false });
             return 0;
         }
+        if (!File.Exists(Path.Combine(dir, "Headroom.exe")) || !File.Exists(Path.Combine(dir, "headroom_server.pyw")))
+            throw new InvalidOperationException("No Headroom installation found in " + dir);   // never delete some other folder
         if (!silent)
         {
             var r = MessageBox.Show("Remove Headroom?\n\nThe GPU goes back to stock clocks and the fans back to the card's own control. " +
@@ -227,7 +264,7 @@ static class Uninstaller
         if (File.Exists(py)) App.Run(py, "\"" + Path.Combine(dir, "headroom_reset.pyw") + "\"", 30000);
         foreach (var t in App.Tasks) App.Run("schtasks.exe", "/delete /f /tn \"" + t + "\"", 10000);
         var local = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Headroom");
-        App.Stop(Path.Combine(local, "tools"));   // sensor app / CoreCycler that Headroom downloaded
+        App.Stop(Path.Combine(local, "tools"));   // tools downloaded by 1.0.0 (newer versions keep them in <dir>\tools)
         try { File.Delete(App.StartMenuLnk); } catch { }
         try { File.Delete(App.DesktopLnk); } catch { }
         using (var hk = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64)) { try { hk.DeleteSubKeyTree(App.UninstKey, false); } catch { } }

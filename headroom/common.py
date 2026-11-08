@@ -17,8 +17,10 @@ PROFILE_FILE = os.path.join(DATA_DIR, "profile.json")       # the active profile
 SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 BUILTIN_DIR = os.path.join(APP_DIR, "profiles", "builtin")    # researched profiles shipped with the app
 FAMILIES_FILE = os.path.join(APP_DIR, "profiles", "families.json")
-# tools (CoreCycler, LibreHardwareMonitor) are downloaded per user, never shipped
-TOOLS_DIR = os.path.join(os.environ.get("LOCALAPPDATA", DATA_DIR), "Headroom", "tools")
+# tools (CoreCycler, LibreHardwareMonitor) are downloaded on request, never shipped. They live next to
+# the app (Program Files when installed: admin-only) because they run elevated, some from logon tasks:
+# in a user-writable folder any non-admin program could swap them and gain admin rights.
+TOOLS_DIR = os.path.join(APP_DIR, "tools")
 VENDOR_DIR = os.path.join(APP_DIR, "vendor")                   # pip packages (anthropic SDK) in dev checkouts
 if os.path.isdir(VENDOR_DIR) and VENDOR_DIR not in sys.path:
     sys.path.append(VENDOR_DIR)
@@ -142,7 +144,8 @@ def write_json(path, data):
 
 def load_profiles():
     """The active profile for this PC (written by setup). Empty until setup has run."""
-    return read_json(PROFILE_FILE, {}) or {}
+    from .profiles import clamp_all
+    return clamp_all(read_json(PROFILE_FILE, {}) or {})
 
 
 def match_profile(section, name, profiles=None):

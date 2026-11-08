@@ -37,10 +37,10 @@ powershell -ExecutionPolicy Bypass -File installer\build.ps1 -Version 1.0.0
 # -> dist\HeadroomSetup-1.0.0.exe (+ .sha256)
 ```
 
-The build script downloads the WebView2 SDK from NuGet and compiles `Headroom.exe` and the installer with the C# compiler that ships with Windows. It also copies a private Python runtime (isolated with a `._pth` file) and pip-installs the Anthropic SDK into `vendor/`.
+The build script downloads the WebView2 SDK from NuGet and compiles `Headroom.exe` and the installer with the C# compiler that ships with Windows. It also copies a private Python runtime (isolated with a `._pth` file) and installs the Anthropic SDK into `vendor/` from `installer/requirements.txt`. Every download is pinned by SHA-256, and the build stops on a mismatch.
 
 To run from a checkout: build once (for the WebView2 DLLs and `Headroom.exe`), then
-`py -3.12 -m pip install --target vendor anthropic` and start `Headroom.exe`.
+`py -3.12 -m pip install --require-hashes --no-deps -r installer\requirements.txt --target vendor` and start `Headroom.exe`.
 
 Installer switches: `/S` silent, `/D=C:\path` install folder, `/extract <dir>` unpack only.
 Uninstall from *Settings → Apps*, or run `Uninstall.exe /uninstall [/S] [/removedata]`. Uninstalling puts the GPU back to stock, gives the fans back to the card and removes Headroom's scheduled tasks.
@@ -59,7 +59,11 @@ profiles/              builtin/ researched profiles, families.json fallback guid
 installer/             Setup.cs (installer + uninstaller), build.ps1, setup.manifest
 ```
 
-Data lives in `%APPDATA%\Headroom` (profile, scan, state, logs). Downloaded tools go in `%LOCALAPPDATA%\Headroom\tools`.
+Data lives in `%APPDATA%\Headroom` (profile, scan, state, logs). Downloaded tools go in `tools\` inside the install folder, which only administrators can change, because they run elevated.
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for how the elevated backend is protected and how to report a vulnerability.
 
 ## Disclaimer
 

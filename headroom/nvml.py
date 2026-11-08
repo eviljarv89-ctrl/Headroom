@@ -194,8 +194,16 @@ class Nvml:
         self._chk("nvmlDeviceGetClockOffsets", self.lib.nvmlDeviceGetClockOffsets(self.h, C.byref(s)))
         return s.clockOffsetMHz, s.minClockOffsetMHz, s.maxClockOffsetMHz
 
+    # absolute limits for any offset, whatever asked for it (UI, saved state, logon task)
+    MAX_CORE, MIN_CORE = 500, -1000
+    MAX_MEM, MIN_MEM = 6000, -2000      # NVML units (Afterburner x2 on GDDR6/7)
+
     def set_offset(self, kind, mhz, pstates=(0, 2)):
         """Apply to P0 (games) and P2 (CUDA/compute) so both see the same clocks."""
+        mhz = int(mhz)
+        lo, hi = (self.MIN_CORE, self.MAX_CORE) if kind == CLK_GRAPHICS else (self.MIN_MEM, self.MAX_MEM)
+        if not lo <= mhz <= hi:
+            raise ValueError("Offset %+d MHz is outside Headroom's limit (%+d to %+d)" % (mhz, lo, hi))
         if self.api == "vf_offset":
             fn = "nvmlDeviceSetGpcClkVfOffset" if kind == CLK_GRAPHICS else "nvmlDeviceSetMemClkVfOffset"
             self._chk(fn, getattr(self.lib, fn)(self.h, C.c_int(int(mhz))))

@@ -1,8 +1,10 @@
 """Headroom backend: local HTTP API + the web UI (shown by Headroom.exe in a
 borderless WebView2 window, same as Riffsmith / the Claude Widget).
 Runs elevated (Headroom.exe has a requireAdministrator manifest)."""
+import hmac
 import json
 import os
+import secrets
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -17,6 +19,13 @@ from .nvml import CLK_GRAPHICS, CLK_MEM, Nvml
 from .sensors import Telemetry
 
 PORT = int(os.environ.get("HEADROOM_PORT") or 7871)
+# Per-launch secret. Headroom.exe (elevated) makes it, hands it over in the environment and adds it
+# to every request the window makes, so no web page and no non-admin process can drive this
+# elevated API. Removed from the environment so tools started from here never inherit it.
+TOKEN = os.environ.pop("HEADROOM_TOKEN", "") or secrets.token_hex(32)
+HOSTS = {"127.0.0.1:%d" % PORT, "localhost:%d" % PORT}
+ORIGIN = "http://127.0.0.1:%d" % PORT
+MAX_BODY = 1 << 20
 WEB = os.path.join(APP_DIR, "web")
 GPU_TASK = "Headroom GPU Apply"
 PYW = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
@@ -361,14 +370,20 @@ class Controller:
             self._bg("Measuring", lambda: self.cpu.finish_verify(prog))
 
     def cpu_start_search(self, start):
-        self.cpu.start_search(int(start))
+        self.cpu.start_search(max(-50, min(0, int(start))))
         self.cpu.start_watchdog(self._on_trip)
 
     def cpu_install(self):
         self._bg("Installing CoreCycler", lambda: cpu_tune.install_corecycler(self.log))
 
     def bench(self, rows):
-        self.state.set("bench", value=rows)
+        clean = []
+        for r in (rows if isinstance(rows, list) else [])[:50]:
+            try:
+                clean.append([str(r[0])[:80], float(r[1]), float(r[2])])
+            except (TypeError, ValueError, IndexError):
+                continue
+        self.state.set("bench", value=clean)
 
     def shutdown_ok(self):
         return not (self.tuner and self.tuner.is_alive())
@@ -383,51 +398,104 @@ class Controller:
 class Handler(BaseHTTPRequestHandler):
     ctl = None
     server_ref = None
+    server_version = "Headroom"
+    sys_version = ""
 
     def log_message(self, *a):
         pass
 
-    def _send(self, code, body, ctype="application/json"):
+    def _send(self, code, body, ctype="application/json", extra=None):
         data = body if isinstance(body, bytes) else json.dumps(body, default=str).encode()
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+        for k, v in (extra or {}).items():
+            self.send_header(k, v)
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
 
+    def _allowed(self, api):
+        """Host check defeats DNS rebinding; Origin check and the token defeat
+        cross-site requests from any page open in a browser."""
+        if self.headers.get("Host", "") not in HOSTS:
+            self._send(403, {"error": "forbidden host"})
+            return False
+        origin = self.headers.get("Origin")
+        if origin is not None and origin != ORIGIN:
+            self._send(403, {"error": "forbidden origin"})
+            return False
+        if api and not hmac.compare_digest(self.headers.get("X-Headroom-Token", ""), TOKEN):
+            self._send(403, {"error": "not authorised"})
+            return False
+        return True
+
     def do_GET(self):
         path, _, q = self.path.partition("?")
+        if path == "/api/ping":   # unauthenticated liveness check for Headroom.exe: no data
+            if self._allowed(False):
+                self._send(200, {"ok": True, "pid": os.getpid()})
+            return
+        if not self._allowed(path.startswith("/api/")):
+            return
         if path == "/api/status":
-            since = int(dict(x.split("=", 1) for x in q.split("&") if "=" in x).get("since", 0) or 0)
+            try:
+                since = int(dict(x.split("=", 1) for x in q.split("&") if "=" in x).get("since", 0) or 0)
+            except ValueError:
+                since = 0
             return self._send(200, self.ctl.status(since))
         if path == "/api/profiles":
             return self._send(200, self.ctl.profiles)
         if path == "/api/setup":
             return self._send(200, self.ctl.setup.status())
+        if path.startswith("/api/"):
+            return self._send(404, {"error": "unknown"})
         if path in ("/", "/index.html"):
             path = "/index.html"
         f = os.path.normpath(os.path.join(WEB, path.lstrip("/")))
-        if not f.startswith(WEB) or not os.path.isfile(f):
+        if not f.startswith(WEB + os.sep) or not os.path.isfile(f):
             return self._send(404, {"error": "not found"})
+        ext = f.rsplit(".", 1)[-1].lower()
         ctype = {"html": "text/html", "js": "text/javascript", "css": "text/css", "png": "image/png",
-                 "svg": "image/svg+xml", "ico": "image/x-icon"}.get(f.rsplit(".", 1)[-1], "application/octet-stream")
+                 "svg": "image/svg+xml", "ico": "image/x-icon"}.get(ext, "application/octet-stream")
         with open(f, "rb") as fh:
-            self._send(200, fh.read(), ctype + ("; charset=utf-8" if ctype.startswith("text") else ""))
+            data = fh.read()
+        extra = {}
+        if ext == "html":
+            # only the page's own <script> blocks run: injected markup can't execute script
+            nonce = secrets.token_urlsafe(18)
+            data = data.replace(b"<script>", ('<script nonce="%s">' % nonce).encode())
+            extra["Content-Security-Policy"] = (
+                "default-src 'none'; script-src 'nonce-%s'; style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data:; font-src 'self' data:; connect-src 'self'; "
+                "base-uri 'none'; form-action 'none'; frame-ancestors 'none'" % nonce)
+        self._send(200, data, ctype + ("; charset=utf-8" if ctype.startswith("text") else ""), extra)
 
     def do_POST(self):
-        n = int(self.headers.get("Content-Length") or 0)
+        if not self._allowed(True):
+            return
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            n = -1
+        if n < 0 or n > MAX_BODY:
+            return self._send(413, {"error": "request too large"})
         try:
             body = json.loads(self.rfile.read(n) or b"{}")
         except ValueError:
             body = {}
+        if not isinstance(body, dict):
+            body = {}
         c = self.ctl
         routes = {
-            "/api/gpu/auto": lambda: c.gpu_auto(bool(body.get("quick")), body.get("mode", "full")),
+            "/api/gpu/auto": lambda: c.gpu_auto(bool(body.get("quick")), str(body.get("mode", "full"))),
             "/api/gpu/stop": c.gpu_stop,
-            "/api/gpu/apply": lambda: c.gpu_apply(body.get("core", 0), body.get("mem", 0)),
+            "/api/gpu/apply": lambda: c.gpu_apply(_int(body.get("core")), _int(body.get("mem"))),
             "/api/gpu/apply_saved": c.gpu_apply_saved,
-            "/api/gpu/save_profile": lambda: c.gpu_save_profile(int(body.get("core", 0)), int(body.get("mem", 0))),
+            "/api/gpu/save_profile": lambda: c.gpu_save_profile(_int(body.get("core")), _int(body.get("mem"))),
             "/api/gpu/stock": c.gpu_stock,
             "/api/gpu/efficiency": lambda: c.gpu_eff(bool(body.get("on"))),
             "/api/gpu/logon": lambda: c.gpu_set_logon(bool(body.get("on"))),
@@ -438,15 +506,15 @@ class Handler(BaseHTTPRequestHandler):
             "/api/setup/scan": lambda: c.setup.run_scan(True),
             "/api/setup/rebuild": c.setup.rebuild,
             "/api/setup/research": c.setup.run_research,
-            "/api/setup/key": lambda: c.setup.set_key(body.get("key") or ""),
+            "/api/setup/key": lambda: c.setup.set_key(str(body.get("key") or "")),
             "/api/setup/cooling": lambda: c.setup.set_cooling(body),
             "/api/setup/lhm": c.setup.install_lhm,
             "/api/cpu/preflight": c.cpu_preflight,
             "/api/cpu/action": lambda: c.cpu_action(body),
-            "/api/cpu/start_search": lambda: c.cpu_start_search(body.get("start", -25)),
+            "/api/cpu/start_search": lambda: c.cpu_start_search(_int(body.get("start"), -25)),
             "/api/cpu/install": c.cpu_install,
             "/api/cpu/reset": c.cpu.reset,
-            "/api/bench": lambda: c.bench(body.get("rows", [])),
+            "/api/bench": lambda: c.bench(body.get("rows")),
             "/api/openfolder": lambda: os.startfile(DATA_DIR),
             "/api/can_close": lambda: {"ok": c.shutdown_ok(), "cpu_watch": bool(c.cpu.watch and c.cpu.watch.is_alive())},
         }
@@ -463,6 +531,13 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, r if isinstance(r, dict) else {"ok": True, "result": r})
         except Exception as e:  # noqa: BLE001
             self._send(400, {"error": str(e)})
+
+
+def _int(v, default=0):
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        return default
 
 
 class Exclusive(ThreadingHTTPServer):

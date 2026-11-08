@@ -783,7 +783,8 @@ function feed(id,filter){ const el=$(id), want=logs.filter(filter).slice(-120);
   const atEnd=el.scrollTop+el.clientHeight>=el.scrollHeight-20;
   el.innerHTML=want.map(l=>`<div class="${l.lvl}">${esc(l.t.slice(11))}</div>`).join("")||'<div style="color:var(--faint)">Nothing yet.</div>';
   if(atEnd) el.scrollTop=el.scrollHeight; }
-const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const safeUrl=u=>/^https:\/\/[^\s"'<>]+$/i.test(String(u||""))?String(u):"";   // only plain https links from profiles
 
 // ---- bench
 function renderBench(){ const rows=S.bench;
@@ -808,9 +809,9 @@ async function renderProfiles(){
         h+=`<span>${k.replace(/_/g," ")}</span><div>${typeof v==="object"?esc(Object.entries(v).map(([a,b])=>a.replace(/_/g," ")+": "+(Array.isArray(b)?b.join(" – "):b)).join(" · ")):esc(String(v))}</div>`; }
       h+=`</div>`;
       if(p.settings_to_enter) h+=`<table style="margin-top:10px"><thead><tr><th>BIOS setting</th><th>Value</th></tr></thead><tbody>${p.settings_to_enter.map(r=>`<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td></tr>`).join("")}</tbody></table>`;
-      if(p.community_results) h+=`<table style="margin-top:12px"><thead><tr><th>Source</th><th>Settings</th><th>Result</th></tr></thead><tbody>${p.community_results.map(c=>`<tr><td><b>${c.url?`<a href="${esc(c.url)}" target="_blank">${esc(c.source)}</a>`:esc(c.source)}</b></td><td>${esc(c.settings)}</td><td>${esc(c.result)}</td></tr>`).join("")}</tbody></table>`;
+      if(p.community_results) h+=`<table style="margin-top:12px"><thead><tr><th>Source</th><th>Settings</th><th>Result</th></tr></thead><tbody>${p.community_results.map(c=>`<tr><td><b>${safeUrl(c.url)?`<a href="${esc(safeUrl(c.url))}" target="_blank" rel="noopener">${esc(c.source)}</a>`:esc(c.source)}</b></td><td>${esc(c.settings)}</td><td>${esc(c.result)}</td></tr>`).join("")}</tbody></table>`;
       if(p.safety){ const sf=p.safety; h+=`<div class="label" style="margin-top:12px">Safety</div><ul>${(sf.notes||[]).map(n=>`<li>${esc(n)}</li>`).join("")}</ul>`; }
-      if(p.sources&&p.sources.length) h+=`<div class="label" style="margin-top:12px">Sources</div><ul>${p.sources.map(s=>`<li><a href="${s}" target="_blank">${esc(s.replace(/^https?:\/\/(www\.)?/,"").slice(0,90))}</a></li>`).join("")}</ul>`;
+      if(p.sources&&p.sources.length) h+=`<div class="label" style="margin-top:12px">Sources</div><ul>${p.sources.filter(safeUrl).map(s=>`<li><a href="${esc(s)}" target="_blank" rel="noopener">${esc(s.replace(/^https?:\/\/(www\.)?/,"").slice(0,90))}</a></li>`).join("")}</ul>`;
       h+=`</div>`; } }
   $("profBody").innerHTML=h;
 }

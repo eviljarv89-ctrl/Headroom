@@ -8,6 +8,7 @@ using System.Drawing;
 using System.IO;
 using System.Net;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Threading;
 using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
@@ -16,6 +17,15 @@ using Microsoft.Web.WebView2.WinForms;
 class Headroom
 {
     public const string Url = "http://127.0.0.1:7871/";
+    // per-launch secret shared only with the backend we start (environment) and added by the window
+    // to its own requests, so web pages and non-admin programs can't drive the elevated API
+    public static string Token = Environment.GetEnvironmentVariable("HEADROOM_TOKEN") ?? NewToken();
+    static string NewToken()
+    {
+        var b = new byte[32];
+        using (var r = RandomNumberGenerator.Create()) r.GetBytes(b);
+        return BitConverter.ToString(b).Replace("-", "").ToLowerInvariant();
+    }
     public static string Dir = AppDomain.CurrentDomain.BaseDirectory;
     public static string Data = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Headroom");
 
@@ -45,7 +55,17 @@ class Headroom
             splash.Show(); Application.DoEvents();
 
             Process py = null;
-            if (!Alive())
+            int old = PingPid();
+            if (old > 0)
+            {   // a backend from an earlier session that we can't authenticate to: stop it and start our own
+                try { var op = Process.GetProcessById(old); if (op.ProcessName.StartsWith("python", StringComparison.OrdinalIgnoreCase)) { op.Kill(); op.WaitForExit(5000); } } catch { }
+            }
+            if (PingPid() > 0)
+            {
+                splash.Close();
+                MessageBox.Show("Another program is using Headroom's port 7871. Close it and start Headroom again.", "Headroom", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
             {
                 var pyw = FindPythonw();
                 if (pyw == null)
@@ -54,10 +74,12 @@ class Headroom
                     MessageBox.Show("Headroom's Python runtime is missing. Reinstall Headroom (or install Python 3.12 for a source checkout).", "Headroom", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return;
                 }
-                py = Process.Start(new ProcessStartInfo(pyw, "\"" + Path.Combine(Dir, "headroom_server.pyw") + "\"")
-                    { WorkingDirectory = Dir, UseShellExecute = false, CreateNoWindow = true });
+                var psi = new ProcessStartInfo(pyw, "\"" + Path.Combine(Dir, "headroom_server.pyw") + "\"")
+                    { WorkingDirectory = Dir, UseShellExecute = false, CreateNoWindow = true };
+                psi.EnvironmentVariables["HEADROOM_TOKEN"] = Token;
+                py = Process.Start(psi);
                 var t0 = DateTime.Now;
-                while (!Alive())
+                while (PingPid() != py.Id)
                 {
                     Application.DoEvents(); Thread.Sleep(200);
                     if (py.HasExited || (DateTime.Now - t0).TotalSeconds > 45)
@@ -83,7 +105,7 @@ class Headroom
                 win.Shown += (s, e) => splash.Close();
                 Application.Run(win);
             }
-            try { using (var wc = new WebClient()) wc.UploadString(Url + "api/shutdown", "{}"); } catch { }
+            try { using (var wc = new WebClient()) { wc.Headers["X-Headroom-Token"] = Token; wc.UploadString(Url + "api/shutdown", "{}"); } } catch { }
             if (py != null) { try { if (!py.WaitForExit(20000)) py.Kill(); } catch { } }
         }
     }
@@ -101,14 +123,21 @@ class Headroom
         return null;
     }
 
-    public static bool Alive()
+    // pid of whatever answers on our port (0 = nothing)
+    public static int PingPid()
     {
         try
         {
-            var req = (HttpWebRequest)WebRequest.Create(Url + "api/status"); req.Timeout = 1500;
-            using (var r = req.GetResponse()) return true;
+            var req = (HttpWebRequest)WebRequest.Create(Url + "api/ping"); req.Timeout = 1500;
+            using (var r = req.GetResponse())
+            using (var sr = new StreamReader(r.GetResponseStream()))
+            {
+                var m = System.Text.RegularExpressions.Regex.Match(sr.ReadToEnd(), "\"pid\"\\s*:\\s*(\\d+)");
+                return m.Success ? int.Parse(m.Groups[1].Value) : -1;
+            }
         }
-        catch { return false; }
+        catch (WebException e) { return e.Response != null ? -1 : 0; }
+        catch { return 0; }
     }
 }
 
@@ -142,7 +171,24 @@ class MainWindow : Form
             await web.EnsureCoreWebView2Async(env);
             var st = web.CoreWebView2.Settings;
             st.IsStatusBarEnabled = false; st.IsZoomControlEnabled = false; st.AreDefaultContextMenusEnabled = false;
-            web.CoreWebView2.WebMessageReceived += (o, m) => OnMessage(m.TryGetWebMessageAsString());
+            st.AreDevToolsEnabled = false; st.IsGeneralAutofillEnabled = false; st.IsPasswordAutosaveEnabled = false;
+            // the token goes only on requests to our own backend
+            web.CoreWebView2.AddWebResourceRequestedFilter(Headroom.Url + "*", CoreWebView2WebResourceContext.All);
+            web.CoreWebView2.WebResourceRequested += (o, r) =>
+            {
+                if (r.Request.Uri.StartsWith(Headroom.Url, StringComparison.OrdinalIgnoreCase))
+                    r.Request.Headers.SetHeader("X-Headroom-Token", Headroom.Token);
+            };
+            // the window only ever shows Headroom's own page; links go to the normal browser
+            web.CoreWebView2.NavigationStarting += (o, n) =>
+            {
+                if (!n.Uri.StartsWith(Headroom.Url, StringComparison.OrdinalIgnoreCase)) { n.Cancel = true; OpenExternal(n.Uri); }
+            };
+            web.CoreWebView2.FrameNavigationStarting += (o, n) => { if (!n.Uri.StartsWith(Headroom.Url, StringComparison.OrdinalIgnoreCase)) n.Cancel = true; };
+            web.CoreWebView2.WebMessageReceived += (o, m) =>
+            {
+                if (m.Source.StartsWith(Headroom.Url, StringComparison.OrdinalIgnoreCase)) OnMessage(m.TryGetWebMessageAsString());
+            };
             web.CoreWebView2.NavigationCompleted += (o, n) => Notify();
             web.CoreWebView2.NewWindowRequested += (o, n) => { n.Handled = true; OpenExternal(n.Uri); };
             web.Source = new Uri(Headroom.Url + hash);
@@ -152,8 +198,12 @@ class MainWindow : Form
     }
 
     static void OpenExternal(string uri)
-    {   // we run elevated: open links in the user's normal (non-admin) browser via Explorer
-        try { Process.Start(new ProcessStartInfo("explorer.exe", "\"" + uri + "\"") { UseShellExecute = false }); } catch { }
+    {   // we run elevated: open links in the user's normal (non-admin) browser via Explorer.
+        // Only plain web links: never file paths or other protocol handlers.
+        Uri u;
+        if (!Uri.TryCreate(uri, UriKind.Absolute, out u) || (u.Scheme != Uri.UriSchemeHttps && u.Scheme != Uri.UriSchemeHttp)) return;
+        if (u.IsLoopback) return;
+        try { Process.Start(new ProcessStartInfo("explorer.exe", "\"" + u.AbsoluteUri.Replace("\"", "%22") + "\"") { UseShellExecute = false }); } catch { }
     }
 
     protected override void OnHandleCreated(EventArgs e)
