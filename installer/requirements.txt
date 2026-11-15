@@ -2,7 +2,7 @@
 # pip --require-hashes, so a tampered or substituted package fails the build.
 # To update: change the version, `pip download --only-binary=:all: anthropic==X` with 64-bit Python 3.12
 # on Windows, and replace the hashes (`Get-FileHash <wheel>`).
-anthropic==2.6.0 --hash=sha256:4325cdf9346fa29183674b6ee6289ebad5b2b0a935758f7350fa504032da1d9b
+anthropic==2.8.0 --hash=sha256:76ad332e2d500fc54d0112cf100544ad1a7605e71e092b98d9eb664d2b66e283 --hash=sha256:d34e389ba0544cd64e033eb7475f46cc1ac6f2a388cdcd472b33ad4ac29ef40c
 annotated-types==0.8.0 --hash=sha256:f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0
 anyio==4.16.0 --hash=sha256:c66ae634e0b8228396b801741beb3294326d4b6102f7bba4041c0dfb58c29026
 docstring-parser==0.18.0 --hash=sha256:b3fcbed555c47d8479be0796ef7e19c2670d428d72e96da63f3a40122860374b
